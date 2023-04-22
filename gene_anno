@@ -1,0 +1,33 @@
+import pandas as pd
+from interval import Interval
+import sys
+print('gene, snp, number')
+print('gene,chr,start,end')
+print('snp,chr,pos')
+gene_location=sys.argv[1]
+snp_file=sys.argv[2]
+if len(sys.argv)>3:
+    extention=sys.argv[3]
+else:
+    extention = 0
+gene_loc=pd.read_csv(gene_location,encoding='unicode escape')
+snp=pd.read_csv(snp_file,encoding='unicode escape')
+#if gene_loc.columns.isin(['gene','chr','start','end']) and snp.columns.isin(['snp','chr','pos']):
+if extention !=0:
+    snp['start'] = snp['pos']-extention
+    snp['end'] = snp['pos']+extention
+
+gene=pd.DataFrame()
+for i in range(len(snp['snp'])):
+        for j in range(len(gene_loc['gene'])):
+            if gene_loc.loc[j,'chr']==snp.loc[i,'chr']:
+                zoom = Interval(gene_loc.loc[j,'start'],gene_loc.loc[j,'end'])
+                if extention == 0:
+                    if snp.loc[i,'pos'] in zoom:
+                        gene.append(gene_loc.iloc[j,:])
+                else:
+                    if (snp.loc[i,'start'] in zoom) or (snp.loc[i,'end'] in zoom):
+                        gene.append(gene_loc.iloc[j, :])
+gene.to_csv('anno_gene.csv',index=False)
+#else:
+#    print('###')
