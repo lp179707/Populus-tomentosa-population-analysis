@@ -1,0 +1,84 @@
+#perl /leofs/biodenovo/duzhl/pub/bin/piplineForQC.pl adp_qual -p -l 30 -f 1_1.fq.gz -r 1_2.fq.gz -o s1
+#$PATH/IlluQC.pl -pe read1.fastq read2.fastq 2 A -l 70 -s 20 -p 2 -z g
+
+##BWA alignment
+samtools faidx ref.fa  
+bwa index ref.fa 
+bwa mem -t 8 -M -R "@RG\tID:0014\tLB:0014\tPL:Illumina\tPU:0014\tSM:0014" genome.softmask.fasta a.1.fq.gz a.2.fq.gz 1>aln-pe.sam 2>>err & 
+java -Xmx2g -Djava.io.tmpdir=temp_path \-jar /data/soft/picard-tools-1.88/picard.jar SortSam \
+	SO=coordinate \INPUT=RWG-002.sam \OUTPUT=RWG-002.bam \VALIDATION_STRINGENCY=LENIENT \
+	CREATE_INDEX=true
+
+##gatk --java-options "-Xmx4G -Djava.io.tmpdir=./"  FixMateInformation -I ${sample}_marked.bam -O ${sample}_marked_fixed.bam  1>log.fix 2>&1
+##mark duplication 
+java -Xmx4g -Djava.io.tmpdir=temp_path -jar /data/soft/picard-tools-1.88/picard.jar MarkDuplicates \
+I=RWG-002.AddRG.bam O=RWG-002.AddRG.dedup.bam M=RWG-002.dedup.txt \
+VALIDATION_STRINGENCY=LENIENT REMOVE_DUPLICATES=true CREATE_INDEX=true 1>>bwa/markdup/log.mark 2>&1 
+
+5. realign
+###.fai,.dict)
+samtools faidx  ref.fa
+java -Xmx2g \-jar /leofs/biodenovo/xiejb/software/picard-tools-1.119/picard.jar \
+CreateSequenceDictionary \R=ref.fa \O=ref.dict
+###indel.intervals
+java -Xmx2g  \-jar /leofs/biodenovo/xiejb/software/GATK_3.2.2/GenomeAnalysisTK.jar \
+-T RealignerTargetCreator \-I s1.sort.AddRG.dedup.bam -I s2.sort.AddRG.dedup.bam \-R ref.fa \-o s1.indel.intervals \-nt 4        
+
+###new_alignment
+java -Xmx2g  \-jar /leofs/biodenovo/xiejb/software/GATK_3.2.2/GenomeAnalysisTK.jar \
+-T IndelRealigner \-I s1.sort.AddRG.dedup.bam \-R ref.fa \-targetIntervals s1.indel.intervals \
+-o s1.sort.AddRG.dedup.realn.bam \
+
+#HaplotypeCaller call SNP
+    java -Xmx2g  \-jar /leofs/biodenovo/xiejb/software/GATK_3.2.2/GenomeAnalysisTK.jar \
+    -pairHMM VECTOR_LOGLESS_CACHING \-T HaplotypeCaller \-nct 4 \-I s1.sort.AddRG.realn.bam \
+    -R ref.fa \--emitRefConfidence GVCF \--variant_index_type LINEAR \--variant_index_parameter 128000 \
+    -o s1.sort.AddRG.realin.g.vcf -mbq 10
+	
+#.g.vcf
+    java -Xmx2g -jar /leofs/biodenovo/xiejb/software/GATK_3.2.2/GenomeAnalysisTK.jar \
+    -T GenotypeGVCFs -nt 8 -R  ref.fa --variant s1.sort.AddRG.realin.g.vcf \
+    --variant s2.sort.AddRG.realin.g.vcf --variant s3.sort.AddRG.realin.g.vcf \
+    -stand_call_conf 10 -o variants.raw.vcf
+	
+#snp
+ select SNP
+    java -Xmx2g -jar $GATK -R $REF -T SelectVariants -o $Slect_SNP --variant $RAW_vcf -selectType SNP  2>select_snp.err
+   
+   select indel
+    java -Xmx2g -jar $GATK -R $REF -T SelectVariants -o $Slest_INdel --variant $RAW_vcf -selectType INDEL 2>select_indel.err
+
+####standard 
+java -jar /opt/biosoft/GenomeAnalysisTK-3.7/GenomeAnalysisTK.jar -T VariantFiltration -R genome.fasta -V SNPs.vcf \
+    --clusterSize 3 --clusterWindowSize 10 \
+    --maskName aroundIndel --mask $Slest_INdel -maskExtend 3 \
+    --filterName FilterQD --filterExpression "QD < 2.0" \
+    --filterName FilterFS --filterExpression "FS > 60.0" \
+    --filterName FilterMQ --filterExpression "MQ < 40.0" \
+    --filterName FilterMQRankSum --filterExpression "MQRankSum < -12.5" \
+    --filterName FilterReadPosRankSum --filterExpression "ReadPosRankSum < -8.0" \
+    --filterName FilterSOR --filterExpression "SOR>3.0" \
+    -o snp.only.concordance.flt2.vcf 2> snp.only.concordance.flt2.log
+#indel：
+java -jar /opt/biosoft/GenomeAnalysisTK-3.7/GenomeAnalysisTK.jar -T VariantFiltration -R genome.fasta -V INDEL.vcf \
+    --clusterSize 3 --clusterWindowSize 10 \
+    --filterName FilterQD --filterExpression "QD < 2.0" \
+    --filterName FilterFS --filterExpression "FS > 200.0" \
+    --filterName FilterReadPosRankSum --filterExpression "ReadPosRankSum < -20.0" \
+    --filterName FilterSOR --filterExpression "SOR>10.0" \
+    --filterName FilterInbreedingCoeff --filterExpression "InbreedingCoeff<-0.8" \
+    -o variants.concordance.flt2.vcf 2> INDEL.concordance.flt2.log
+grep "PASS" snp.only.concordance.flt2.vcf > snp.filt
+grep "PASS" indel.only.cooncordance.fit2.vcf > indel.filt
+grep "#" snp.only.concordance.flt2.vcf > snp.head
+grep "#" indel.only.cooncordance.fit2.vcf > indel.head
+cat snp.head snp.filt > snp.filter.vcf
+cat indel.head indel.filt > indel.filter
+#anno 
+mkdir lentinulaedodes
+cp ~/00.incipient_data/data_for_variants_calling/genome.fasta opt/biosoft/snpEff/data/lentinulaedodes/sequences.fa
+cp genes.gff /opt/biosoft/snpEff/data/lentinulaedodes/genes.gff
+echo "bac.genome : bac" >> /home/pub/share_soft/snpEff/snpEff.config
+java -jar /home/pub/share_soft/snpEff/snpEff.jar build -c /home/pub/share_soft/snpEff/snpEff.config -gtf22 -v bac
+#SnpEff
+java -Xmx4G -jar /home/pub/share_soft/snpEff/snpEff.jar eff -i vcf -o vcf -csvStats variants.SnpEff.csv -s variants.SnpEff.html -c /home/pub/share_soft/snpEff/snpEff.config -v -ud 500 bac /share_bio/lip/20190604bacgwas/20190703/test/bac/filter1.recode.vcf > variant.SnpEff.vcf
