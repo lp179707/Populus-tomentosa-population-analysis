@@ -1,0 +1,114 @@
+Expr1 <- read.table("gene.expression.txt", header = TRUE, row.names = 1)
+Expr2 <- log(Expr1+1, 2) # log2(x+1)
+dim(Expr2)
+library(WGCNA) # version 1.63
+library(flashClust)
+library(reshape2)
+library(stringr)
+library(BiocParallel)
+options(stringsAsFactors = FALSE)
+enableWGCNAThreads()# mutiple Threads
+register(SnowParam(60))
+allowWGCNAThreads(nThreads = 40)
+# type of network
+##type = "unsigned"
+corType = "pearson" # correlation method,another correlation type is “bicor”
+maxPOutliers = 0.05
+robustY = FALSE
+Expr_t <- as.data.frame(t(Expr2))
+gsg = goodSamplesGenes(Expr_t, verbose = 3)
+if (!gsg$allOK){
+  # Optionally, print the gene and sample names that were removed:
+  if (sum(!gsg$goodGenes)>0) 
+    printFlush(paste("Removing genes:", 
+                     paste(names(Expr2)[!gsg$goodGenes], collapse = ",")));
+  if (sum(!gsg$goodSamples)>0) 
+    printFlush(paste("Removing samples:", 
+                     paste(rownames(Expr2)[!gsg$goodSamples], collapse = ",")));
+# Remove the offending genes and samples from the data:
+  Expr_t = Expr_t[gsg$goodSamples, gsg$goodGenes]
+}
+
+nGenes = ncol(Expr_t)
+nSamples = nrow(Expr_t)
+dim(Expr_t)
+
+
+sampleTree <- hclust(dist(Expr_t), method = "average")
+par(mar = c(0,4,2,0))
+pdf(file = "sampleTree.pdf", width = 12, height = 9)
+plot(sampleTree, main = "Sample clustering to detect outliers", sub="", xlab="")
+dev.off()
+
+Expr3<- Expr_t
+powers <- c(seq(1, 10, by=1), seq(12, 20, by=1))
+type ="unsigned"    
+sft = pickSoftThreshold(Expr3, powerVector=powers, networkType=type, verbose=5)
+sizeGrWindow (9,5)
+par(mfrow= c(1,2))   
+cex1=0.9        
+pdf("wgcna_soft.thresholding.pdf")
+plot(sft$fitIndices[,1], -sign(sft$fitIndices[,3])*sft$fitIndices[,2],
+     xlab="Soft Threshold (power)",ylab="Scale Free Topology Model Fit,signed R^2",type="n",
+     main = paste("Scale independence"))
+text(sft$fitIndices[,1], -sign(sft$fitIndices[,3])*sft$fitIndices[,2],
+     labels=powers,cex=cex1,col="red")
+abline(h=0.85,col="red")
+dev.off()
+power = sft$powerEstimate 
+power
+
+
+net <- blockwiseModules(
+  Expr3, 
+  maxBlockSize = dim(Expr3)[2],
+  corType = corType,
+  power = power,
+  networkType = type,
+  TOMType = type,
+  saveTOMs = TRUE, 
+  saveTOMFileBase = "blockwiseTOM",
+  minModuleSize = 30,
+  mergeCutHeight =0.1,    
+  numericLabels = F, # modudule named in number
+  nThreads = 0, 
+  verbose = 3)
+
+table(net$colors)
+moduleLabels = net$colors
+moduleColors = labels2colors(moduleLabels)
+sizeGrWindow(12,9)
+par(cex = 0.6)
+par(mar = c(0,4,2,0))
+pdf("plotDendroAndColors222.pdf")
+plotDendroAndColors(net$dendrograms[[1]],moduleColors[net$blockGenes[[1]]],"Module colors",dendroLabels = FALSE, hang = 0.03,addGuide = TRUE, guideHang = 0.05)
+dev.off()
+save(Expr3, sft, net, moduleColors, file = "wgcna-network.Rdata")
+
+MEs = net$MEs
+MEs = moduleEigengenes(Expr3, moduleColors)$eigengenes
+MET = orderMEs(MEs)
+sizeGrWindow(7, 6)
+pdf("module_correlation33.pdf")
+plotEigengeneNetworks(MET, "Eigengene adjacency heatmap",marHeatmap = c(3,4,2,2), plotDendrograms = FALSE,xLabelsAngle = 90)
+dev.off()
+
+geneNames <- colnames(Expr3)
+module_colors <- setdiff(unique(moduleColors), "grey")
+for (color in module_colors){module <- geneNames[which(moduleColors==color)]
+  write.table(module, paste("module_",color, ".txt",sep=""), sep="\t", row.names=FALSE, col.names=FALSE,quote=FALSE) }
+# Export the network into edge and node list files Cytoscape can read
+load(net$TOMFiles[1], verbose=T)
+TOM <- as.matrix(TOM)
+dimnames(TOM) <- list(geneNames, geneNames)
+
+for(i in module_colors)
+{
+  modules = i
+  probes = colnames(Expr3)
+  inModule = is.finite(match(moduleColors, modules))
+  modProbes = probes[inModule]
+  modTOM = TOM[inModule, inModule]
+  dimnames(modTOM) = list(modProbes, modProbes)
+  cyt = exportNetworkToCytoscape(modTOM,edgeFile = paste("cyt_edges_", paste(modules, collapse="-"), ".txt", sep=""),nodeFile=paste("cyt_nodes_", paste(modules, collapse="-"), ".txt", sep=""),weighted = TRUE,threshold = 0.1, nodeNames = modProbes, nodeAttr = moduleColors[inModule]) 
+}
