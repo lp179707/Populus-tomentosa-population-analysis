@@ -1,0 +1,22 @@
+#Population structure analysis
+plink --vcf Pto.population.maf0.05.miss0.8.recode.vcf --aec --maf 0.05 --recode --out myplink
+plink --file myplink --indep-pairwise 50 5 0.2 --out plink303.ld0.2.out
+plink --file myplink --aec --extract plink.ld0.2.out.prune.in --recode --out Pto.ld0.2.out.prunedata
+plink --noweb --file Pto.ld0.2.out.prunedata --aec --make-bed --out Pto.ld0.2.
+nohup admixture --cv Pto.ld0.2.bed 1 | tee log1.out &
+nohup admixture --cv Pto.ld0.2.bed 2 | tee log2.out &
+nohup admixture --cv Pto.ld0.2.bed 3 | tee log3.out &
+nohup admixture --cv Pto.ld0.2.bed 4 | tee log4.out &
+nohup admixture --cv Pto.ld0.2.bed 5 | tee log5.out &
+nohup admixture --cv Pto.ld0.2.bed 6 | tee log6.out &
+nohup admixture --cv Pto.ld0.2.bed 7 | tee log7.out &
+nohup admixture --cv Pto.ld0.2.bed 8 | tee log8.out &
+nohup admixture --cv Pto.ld0.2.bed 9 | tee log9.out &
+nohup admixture --cv Pto.ld0.2.bed 10 | tee log10.out &
+#kinship analysis
+plink --vcf  Pto.population.maf0.05.miss0.8.recode.vcf --aec --maf 0.05 --recode --out myplink
+plink --file myplink --aec --recode 12 --output-missing-genotype 0 --transpose --out Pto.tped
+#emmax
+emmax-kin -v -h -s -d 10 Pto.tped
+#GWAS in TASSEL
+perl /tassel-5-standalone/run_pipeline.pl -Xmx80g -fork1 -vcf Pto.population.maf0.05.miss0.8.recode.vcf -sortPositions  -filterAlign -fork2 -r trait.txt -sortPositions -fork3 -q structure -sortPositions -excludeLastTrait -fork4 -k kinship.kinf -sortPositions -combine5 -input1 -input2 -input3 -intersect -combine6 -input4 -input5 -mlm -mlmVarCompEst P3D -mlmOutputFile mlm -runfork1 -runfork2 -runfork3 -runfork4 -mlmOutputFile wood.result
